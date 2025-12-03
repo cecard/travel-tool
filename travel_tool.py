@@ -4,8 +4,8 @@ import json
 import os
 from datetime import datetime, timedelta
 import openpyxl
-from openpyxl.styles import Alignment
-import shutil
+from openpyxl.styles import Alignment, Border, Side
+import copy
 
 # --- 配置文件路径 ---
 CONFIG_FILE = "config.json"
@@ -63,10 +63,11 @@ def num_to_cn_amount(num):
 class TravelApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("供电所差旅费自动生成工具")
-        self.root.geometry("700x650")
+        self.root.title("供电所差旅费自动生成工具 V2.0 (多行程版)")
+        self.root.geometry("900x700")
         
         self.config = self.load_config()
+        self.trip_list = [] # 存储待生成的行程列表
         self.setup_ui()
 
     def load_config(self):
@@ -87,7 +88,7 @@ class TravelApp:
         notebook.pack(expand=True, fill='both')
 
         self.frame_gen = ttk.Frame(notebook)
-        notebook.add(self.frame_gen, text="生成报销单")
+        notebook.add(self.frame_gen, text="行程录入与生成")
         self.setup_gen_tab()
 
         self.frame_user = ttk.Frame(notebook)
@@ -99,73 +100,109 @@ class TravelApp:
         self.setup_rules_tab()
 
     def setup_gen_tab(self):
-        p = ttk.Frame(self.frame_gen, padding=15)
-        p.pack(fill='both', expand=True)
+        # 左侧：录入区
+        left_panel = ttk.Frame(self.frame_gen, padding=10)
+        left_panel.pack(side='left', fill='y', expand=False)
+        
+        # 右侧：列表区
+        right_panel = ttk.Frame(self.frame_gen, padding=10)
+        right_panel.pack(side='right', fill='both', expand=True)
 
-        # 报销人
+        # --- 左侧控件 ---
         row = 0
-        ttk.Label(p, text="报销人:").grid(row=row, column=0, sticky='w', pady=5)
-        self.cb_users = ttk.Combobox(p, state="readonly")
-        self.cb_users.grid(row=row, column=1, sticky='ew')
-        self.update_user_combobox()
-
-        # 出发日期
+        ttk.Label(left_panel, text="第一步：选择报销人").grid(row=row, column=0, columnspan=2, sticky='w', pady=(0,5))
         row += 1
-        ttk.Label(p, text="出发日期 (YYYY-MM-DD):").grid(row=row, column=0, sticky='w', pady=5)
-        self.entry_start_date = ttk.Entry(p)
+        self.cb_users = ttk.Combobox(left_panel, state="readonly", width=25)
+        self.cb_users.grid(row=row, column=0, columnspan=2, sticky='ew')
+        self.update_user_combobox()
+        
+        row += 1
+        ttk.Separator(left_panel, orient='horizontal').grid(row=row, column=0, columnspan=2, sticky='ew', pady=10)
+        
+        row += 1
+        ttk.Label(left_panel, text="第二步：录入单次行程").grid(row=row, column=0, columnspan=2, sticky='w', pady=(0,5))
+
+        row += 1
+        ttk.Label(left_panel, text="出发日期:").grid(row=row, column=0, sticky='w')
+        self.entry_start_date = ttk.Entry(left_panel)
         self.entry_start_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
         self.entry_start_date.grid(row=row, column=1, sticky='ew')
 
-        # 填报日期
         row += 1
-        ttk.Label(p, text="填报日期 (YYYY-MM-DD):").grid(row=row, column=0, sticky='w', pady=5)
-        self.entry_fill_date = ttk.Entry(p)
-        self.entry_fill_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.entry_fill_date.grid(row=row, column=1, sticky='ew')
-
-        # 起点
-        row += 1
-        ttk.Label(p, text="起点:").grid(row=row, column=0, sticky='w', pady=5)
-        self.cb_start = ttk.Combobox(p, values=["本所", self.config['station_info']['county'], self.config['station_info']['city']])
+        ttk.Label(left_panel, text="起点:").grid(row=row, column=0, sticky='w')
+        self.cb_start = ttk.Combobox(left_panel, values=["本所", self.config['station_info']['county'], self.config['station_info']['city']])
         self.cb_start.current(0)
         self.cb_start.grid(row=row, column=1, sticky='ew')
 
-        # 终点
         row += 1
-        ttk.Label(p, text="终点:").grid(row=row, column=0, sticky='w', pady=5)
-        self.cb_end = ttk.Combobox(p, values=["辖区线路", self.config['station_info']['county'], self.config['station_info']['city']])
+        ttk.Label(left_panel, text="终点:").grid(row=row, column=0, sticky='w')
+        self.cb_end = ttk.Combobox(left_panel, values=["辖区线路", self.config['station_info']['county'], self.config['station_info']['city']])
         self.cb_end.bind("<<ComboboxSelected>>", self.on_end_point_change)
         self.cb_end.grid(row=row, column=1, sticky='ew')
 
-        # 当天往返
         row += 1
         self.var_same_day = tk.BooleanVar(value=True)
-        self.chk_same_day = ttk.Checkbutton(p, text="是否当天往返", variable=self.var_same_day, command=self.on_sameday_change)
-        self.chk_same_day.grid(row=row, column=1, sticky='w', pady=5)
+        self.chk_same_day = ttk.Checkbutton(left_panel, text="当天往返", variable=self.var_same_day, command=self.on_sameday_change)
+        self.chk_same_day.grid(row=row, column=1, sticky='w')
 
-        # 返回日期
         row += 1
-        ttk.Label(p, text="返回日期 (若非当天):").grid(row=row, column=0, sticky='w', pady=5)
-        self.entry_end_date = ttk.Entry(p)
+        ttk.Label(left_panel, text="返回日期:").grid(row=row, column=0, sticky='w')
+        self.entry_end_date = ttk.Entry(left_panel)
         self.entry_end_date.grid(row=row, column=1, sticky='ew')
         self.entry_end_date.config(state='disabled')
 
-        # 未派车证明
         row += 1
         self.var_need_nocar = tk.BooleanVar(value=False)
-        self.chk_nocar = ttk.Checkbutton(p, text="生成《未派车证明》", variable=self.var_need_nocar, command=self.on_nocar_change)
-        self.chk_nocar.grid(row=row, column=0, sticky='w', pady=5)
+        self.chk_nocar = ttk.Checkbutton(left_panel, text="需未派车证明", variable=self.var_need_nocar)
+        self.chk_nocar.grid(row=row, column=0, sticky='w')
         
-        ttk.Label(p, text="出差事由:").grid(row=row, column=1, sticky='w')
-        self.entry_reason = ttk.Entry(p)
+        ttk.Label(left_panel, text="事由:").grid(row=row, column=1, sticky='w')
+        self.entry_reason = ttk.Entry(left_panel)
         self.entry_reason.insert(0, "差旅")
         self.entry_reason.grid(row=row+1, column=1, sticky='ew')
 
-        # 按钮
         row += 2
-        btn_gen = ttk.Button(p, text="生成 Excel 表格", command=self.generate_excel)
-        btn_gen.grid(row=row, column=0, columnspan=2, pady=20)
+        btn_add = ttk.Button(left_panel, text="⬇️ 添加到列表", command=self.add_trip_to_list)
+        btn_add.grid(row=row, column=0, columnspan=2, pady=15, sticky='ew')
 
+        # --- 右侧列表 ---
+        ttk.Label(right_panel, text="待生成行程列表 (可多次添加):").pack(anchor='w')
+        
+        cols = ("日期", "地点", "金额", "未派车")
+        self.tree_trips = ttk.Treeview(right_panel, columns=cols, show='headings', height=15)
+        self.tree_trips.heading("日期", text="日期")
+        self.tree_trips.heading("地点", text="行程")
+        self.tree_trips.heading("金额", text="金额(元)")
+        self.tree_trips.heading("未派车", text="未派车")
+        
+        self.tree_trips.column("日期", width=100)
+        self.tree_trips.column("地点", width=150)
+        self.tree_trips.column("金额", width=60)
+        self.tree_trips.column("未派车", width=60)
+        self.tree_trips.pack(fill='both', expand=True)
+
+        btn_box = ttk.Frame(right_panel)
+        btn_box.pack(fill='x', pady=5)
+        ttk.Button(btn_box, text="删除选中行", command=self.del_trip_from_list).pack(side='left')
+        ttk.Button(btn_box, text="清空列表", command=self.clear_trip_list).pack(side='left', padx=5)
+
+        # --- 底部生成区 ---
+        bottom_frame = ttk.LabelFrame(right_panel, text="第三步：填报设置与生成")
+        bottom_frame.pack(fill='x', pady=10)
+        
+        ttk.Label(bottom_frame, text="填报日期:").pack(side='left', padx=5)
+        self.entry_fill_date = ttk.Entry(bottom_frame, width=12)
+        self.entry_fill_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.entry_fill_date.pack(side='left')
+
+        btn_gen = ttk.Button(bottom_frame, text="🚀 生成所有文件 (自动增行)", command=self.generate_all_files)
+        btn_gen.pack(side='right', padx=10, pady=5)
+        
+        # 总金额显示
+        self.lbl_total = ttk.Label(right_panel, text="当前总金额: 0 元")
+        self.lbl_total.pack(anchor='e')
+
+    # --- 交互逻辑 ---
     def on_end_point_change(self, event):
         val = self.cb_end.get()
         if val == "辖区线路":
@@ -190,97 +227,287 @@ class TravelApp:
             except:
                 pass
 
-    def on_nocar_change(self):
-        pass # UI上已经处理
+    def add_trip_to_list(self):
+        start_date_str = self.entry_start_date.get()
+        start_place = self.cb_start.get()
+        end_place = self.cb_end.get()
+        is_same_day = self.var_same_day.get()
+        reason = self.entry_reason.get()
+        need_nocar = self.var_need_nocar.get()
 
+        try:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            if not is_same_day:
+                end_date = datetime.strptime(self.entry_end_date.get(), "%Y-%m-%d")
+            else:
+                end_date = start_date
+        except ValueError:
+            return messagebox.showerror("错误", "日期格式无效")
+
+        # 计算单次行程（可能包含去程和回程）
+        new_trips = []
+        
+        if end_place == "辖区线路":
+            rule = self.config['rules']['local']
+            new_trips.append({
+                "date": start_date,
+                "start": self.config['station_info']['name'].replace("供电所",""), 
+                "end": "辖区",
+                "food": rule['food'],
+                "misc": rule['misc'],
+                "nocar": need_nocar,
+                "reason": reason,
+                "full_start_date": start_date, # 用于未派车证明记录原始区间
+                "full_end_date": end_date
+            })
+        else:
+            if end_place == self.config['station_info']['county']:
+                rule = self.config['rules']['county']
+            else:
+                rule = self.config['rules']['city']
+            
+            clean_start = start_place.replace("本所", self.config['station_info']['name'].replace("供电所",""))
+            
+            if is_same_day:
+                new_trips.append({
+                    "date": start_date,
+                    "start": clean_start,
+                    "end": end_place,
+                    "food": 0,
+                    "misc": rule['misc_round_trip'],
+                    "nocar": need_nocar,
+                    "reason": reason,
+                    "full_start_date": start_date,
+                    "full_end_date": end_date
+                })
+            else:
+                # 去程
+                new_trips.append({
+                    "date": start_date,
+                    "start": clean_start,
+                    "end": end_place,
+                    "food": 0,
+                    "misc": rule['misc_one_way'],
+                    "nocar": need_nocar, # 一般证明开在出发那张或包含整个区间
+                    "reason": reason,
+                    "full_start_date": start_date,
+                    "full_end_date": end_date,
+                    "is_return_trip": False
+                })
+                # 回程
+                new_trips.append({
+                    "date": end_date,
+                    "start": end_place,
+                    "end": clean_start,
+                    "food": 0,
+                    "misc": rule['misc_one_way'],
+                    "nocar": False, # 回程通常不需要单独再开一张证明，除非每天都需要
+                    "reason": reason,
+                    "is_return_trip": True
+                })
+
+        # 添加到内存列表
+        for t in new_trips:
+            self.trip_list.append(t)
+        
+        self.refresh_trip_list_ui()
+
+    def del_trip_from_list(self):
+        sel = self.tree_trips.selection()
+        if not sel: return
+        idx = self.tree_trips.index(sel[0])
+        del self.trip_list[idx]
+        self.refresh_trip_list_ui()
+
+    def clear_trip_list(self):
+        self.trip_list = []
+        self.refresh_trip_list_ui()
+
+    def refresh_trip_list_ui(self):
+        for i in self.tree_trips.get_children():
+            self.tree_trips.delete(i)
+        
+        total = 0
+        for t in self.trip_list:
+            cost = t['food'] + t['misc']
+            total += cost
+            nocar_str = "是" if t.get('nocar') else "-"
+            display_loc = f"{t['start']} -> {t['end']}"
+            self.tree_trips.insert('', 'end', values=(t['date'].strftime("%m-%d"), display_loc, cost, nocar_str))
+        
+        self.lbl_total.config(text=f"当前总金额: {total} 元")
+
+    def generate_all_files(self):
+        if not self.trip_list:
+            return messagebox.showerror("错误", "列表为空，请先添加行程")
+        
+        user_idx = self.cb_users.current()
+        if user_idx == -1: return messagebox.showerror("错误", "请选择报销人")
+        user = self.config['users'][user_idx]
+        
+        try:
+            fill_date = datetime.strptime(self.entry_fill_date.get(), "%Y-%m-%d")
+        except:
+            return messagebox.showerror("错误", "填报日期格式错误")
+
+        # 按日期排序
+        self.trip_list.sort(key=lambda x: x['date'])
+        
+        # 计算总金额
+        total_money = sum([t['food'] + t['misc'] for t in self.trip_list])
+
+        # 确定整个报销单的时间区间
+        min_date = self.trip_list[0]['date']
+        max_date = self.trip_list[-1]['date']
+        # 注意：这里的计天数只是个大概，通常报销单的计天数是指所有出差天数之和，
+        # 或者是跨度。这里我们用跨度。
+        total_days = (max_date - min_date).days + 1
+        date_desc = f"自 {min_date.year} 年 {min_date.month} 月 {min_date.day} 日 至 {max_date.year} 年 {max_date.month} 月 {max_date.day} 日 计 {total_days} 天"
+
+        # 生成文件名核心部分
+        file_suffix = f"{user['name']}_{fill_date.strftime('%m%d')}"
+
+        try:
+            # 1. 生成报销单 (支持动态增行)
+            wb = openpyxl.load_workbook(self.config['template_paths']['expense'])
+            ws = wb.active
+            
+            # 填表头
+            ws['K2'] = fill_date.year
+            ws['M2'] = fill_date.month
+            ws['O2'] = fill_date.day
+            ws['B3'] = self.config['station_info']['name'] # 单位
+            ws['G3'] = self.config['station_info']['name'] # 部门
+            ws['B4'] = user['name']
+            ws['E4'] = self.trip_list[0]['reason'] # 取第一个事由或通用
+            ws['G4'] = "详见明细" # 地点
+            ws['J4'] = date_desc
+
+            # 填数据 (从第8行开始)
+            start_row = 8
+            # 假设模板原来的空行是 8, 9, 10, 11, 12, 13 (共6行)
+            # 如果数据超过6行，需要插入新行
+            original_empty_rows = 6 
+            current_row = start_row
+            
+            for i, t in enumerate(self.trip_list):
+                # 如果当前行已经到了底部的合计行之前（假设原来只有6行空位），插入新行
+                if i >= original_empty_rows:
+                    ws.insert_rows(current_row)
+                    # 尝试复制上一行的边框格式（简单处理，不保证完美，但能用）
+                    # openpyxl insert_rows 只是插入空白行
+                
+                ws[f'A{current_row}'] = t['date'].year
+                ws[f'B{current_row}'] = t['date'].month
+                ws[f'C{current_row}'] = t['date'].day
+                ws[f'D{current_row}'] = t['start']
+                ws[f'E{current_row}'] = t['end']
+                
+                if t['food'] > 0:
+                    ws[f'H{current_row}'] = 1
+                    ws[f'I{current_row}'] = t['food']
+                
+                if t['misc'] > 0:
+                    ws[f'M{current_row}'] = t['misc']
+                
+                current_row += 1
+
+            # 底部金额与银行 (因为插入了行，所以底部坐标变了)
+            # 原始底部大致在 Row 14 (合计), Row 15 (银行)
+            # 如果插入了 N 行，底部就是 14+N, 15+N
+            added_rows = max(0, len(self.trip_list) - original_empty_rows)
+            
+            # 动态寻找“总计金额”所在行，以防万一
+            # 这里简单直接计算
+            row_total = 14 + added_rows
+            row_bank = 15 + added_rows
+
+            ws[f'G{row_total}'] = num_to_cn_amount(total_money)
+            ws[f'C{row_bank}'] = user['name']
+            ws[f'F{row_bank}'] = user['card']
+            ws[f'K{row_bank}'] = user['bank']
+            ws[f'N{row_bank}'] = user['phone']
+
+            wb.save(f"1_差旅费报销单_{file_suffix}.xlsx")
+
+            # 2. 生成审核单
+            wb2 = openpyxl.load_workbook(self.config['template_paths']['audit'])
+            ws2 = wb2.active
+            ws2['K4'] = fill_date.year
+            ws2['M4'] = fill_date.month
+            ws2['O4'] = fill_date.day
+            ws2['E6'] = self.config['station_info']['name']
+            ws2['J10'] = total_money
+            ws2['C11'] = num_to_cn_amount(total_money)
+            ws2['C12'] = user['name']
+            ws2['F12'] = user['card']
+            ws2['K12'] = user['bank']
+            ws2['N12'] = user['phone']
+            wb2.save(f"2_报销审核单_{file_suffix}.xlsx")
+
+            # 3. 批量生成未派车证明
+            # 筛选出需要未派车的行程
+            nocar_trips = [t for t in self.trip_list if t.get('nocar')]
+            count_nocar = 0
+            
+            for t in nocar_trips:
+                wb3 = openpyxl.load_workbook(self.config['template_paths']['no_car'])
+                ws3 = wb3.active
+                
+                # 证明日期 (用该次行程的开始日期)
+                proof_date = t['date']
+                ws3['F3'] = proof_date.year
+                ws3['H3'] = proof_date.month
+                ws3['J3'] = proof_date.day
+                
+                ws3['B5'] = self.config['station_info']['name']
+                ws3['E5'] = user['name']
+                ws3['H5'] = t['end'] # 地点
+                ws3['B7'] = t['reason']
+                
+                # 起止日期 (取原始录入的 full_start_date 和 full_end_date)
+                fs = t.get('full_start_date', proof_date)
+                fe = t.get('full_end_date', proof_date)
+                
+                ws3['B8'] = fs.month
+                ws3['D8'] = fs.day
+                ws3['F8'] = fe.month
+                ws3['H8'] = fe.day
+                
+                # 唯一文件名
+                fname = f"3_未派车_{user['name']}_{fs.strftime('%m%d')}_至_{t['end']}.xlsx"
+                wb3.save(fname)
+                count_nocar += 1
+
+            messagebox.showinfo("成功", f"生成完毕！\n- 报销单: 1份\n- 审核单: 1份\n- 未派车证明: {count_nocar}份")
+
+        except Exception as e:
+            messagebox.showerror("运行出错", str(e))
+
+    # --- 用户管理部分 (保持不变) ---
     def setup_user_tab(self):
         p = ttk.Frame(self.frame_user, padding=10)
         p.pack(fill='both', expand=True)
-
         cols = ("姓名", "电话", "银行", "卡号")
         self.tree = ttk.Treeview(p, columns=cols, show='headings', height=10)
         for col in cols:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=100)
         self.tree.pack(fill='x')
-
         frame_input = ttk.Frame(p)
         frame_input.pack(pady=10)
-        
         self.entries_user = {}
         for i, col in enumerate(cols):
             ttk.Label(frame_input, text=col).grid(row=0, column=i, padx=5)
             e = ttk.Entry(frame_input, width=15)
             e.grid(row=1, column=i, padx=5)
             self.entries_user[col] = e
-
         btn_box = ttk.Frame(p)
         btn_box.pack(pady=5)
         ttk.Button(btn_box, text="添加用户", command=self.add_user).pack(side='left', padx=5)
         ttk.Button(btn_box, text="删除选中", command=self.del_user).pack(side='left', padx=5)
         ttk.Button(btn_box, text="设为默认", command=self.set_default_user).pack(side='left', padx=5)
-        
         self.refresh_user_list()
-
-    def setup_rules_tab(self):
-        p = ttk.Frame(self.frame_rules, padding=10)
-        p.pack(fill='both', expand=True)
-
-        # 供电所设置
-        grp_station = ttk.LabelFrame(p, text="基本信息")
-        grp_station.pack(fill='x', pady=5)
-        
-        ttk.Label(grp_station, text="供电所名:").grid(row=0, column=0)
-        self.entry_st_name = ttk.Entry(grp_station)
-        self.entry_st_name.insert(0, self.config['station_info']['name'])
-        self.entry_st_name.grid(row=0, column=1)
-
-        ttk.Label(grp_station, text="所属县城:").grid(row=0, column=2)
-        self.entry_st_county = ttk.Entry(grp_station)
-        self.entry_st_county.insert(0, self.config['station_info']['county'])
-        self.entry_st_county.grid(row=0, column=3)
-
-        ttk.Label(grp_station, text="所属城市:").grid(row=0, column=4)
-        self.entry_st_city = ttk.Entry(grp_station)
-        self.entry_st_city.insert(0, self.config['station_info']['city'])
-        self.entry_st_city.grid(row=0, column=5)
-
-        # 费用规则
-        grp_rule = ttk.LabelFrame(p, text="费用规则 (元)")
-        grp_rule.pack(fill='x', pady=5)
-
-        # 辖区内
-        ttk.Label(grp_rule, text="[辖区内] 伙食:").grid(row=0, column=0, pady=5)
-        self.e_local_food = ttk.Entry(grp_rule, width=8)
-        self.e_local_food.insert(0, self.config['rules']['local']['food'])
-        self.e_local_food.grid(row=0, column=1)
-        
-        # 县城
-        ttk.Label(grp_rule, text="[县城] 往返杂费:").grid(row=1, column=0, pady=5)
-        self.e_county_round = ttk.Entry(grp_rule, width=8)
-        self.e_county_round.insert(0, self.config['rules']['county']['misc_round_trip'])
-        self.e_county_round.grid(row=1, column=1)
-
-        ttk.Label(grp_rule, text="[县城] 单程杂费:").grid(row=1, column=2)
-        self.e_county_single = ttk.Entry(grp_rule, width=8)
-        self.e_county_single.insert(0, self.config['rules']['county']['misc_one_way'])
-        self.e_county_single.grid(row=1, column=3)
-        
-        # 城市
-        ttk.Label(grp_rule, text="[市区] 往返杂费:").grid(row=2, column=0, pady=5)
-        self.e_city_round = ttk.Entry(grp_rule, width=8)
-        self.e_city_round.insert(0, self.config['rules']['city']['misc_round_trip'])
-        self.e_city_round.grid(row=2, column=1)
-
-        ttk.Label(grp_rule, text="[市区] 单程杂费:").grid(row=2, column=2)
-        self.e_city_single = ttk.Entry(grp_rule, width=8)
-        self.e_city_single.insert(0, self.config['rules']['city']['misc_one_way'])
-        self.e_city_single.grid(row=2, column=3)
-
-        btn_save = ttk.Button(p, text="保存所有设置", command=self.save_all_settings)
-        btn_save.pack(pady=20)
-
-    # --- 逻辑功能 ---
+    
     def refresh_user_list(self):
         for i in self.tree.get_children():
             self.tree.delete(i)
@@ -300,14 +527,12 @@ class TravelApp:
         self.save_config()
         self.refresh_user_list()
         self.update_user_combobox()
-        # 清空输入框
         for e in self.entries_user.values(): e.delete(0, tk.END)
 
     def del_user(self):
         sel = self.tree.selection()
         if not sel: return
-        item = self.tree.item(sel[0])
-        name = item['values'][0]
+        name = self.tree.item(sel[0])['values'][0]
         self.config['users'] = [u for u in self.config['users'] if u['name'] != name]
         self.config['current_user_index'] = -1
         self.save_config()
@@ -319,13 +544,54 @@ class TravelApp:
         if idx != -1:
             self.config['current_user_index'] = idx
             self.save_config()
-            messagebox.showinfo("成功", "已设为默认登录人")
+            messagebox.showinfo("成功", "已设为默认")
 
+    def setup_rules_tab(self):
+        p = ttk.Frame(self.frame_rules, padding=10)
+        p.pack(fill='both', expand=True)
+        grp_station = ttk.LabelFrame(p, text="基本信息")
+        grp_station.pack(fill='x', pady=5)
+        ttk.Label(grp_station, text="供电所名:").grid(row=0, column=0)
+        self.entry_st_name = ttk.Entry(grp_station)
+        self.entry_st_name.insert(0, self.config['station_info']['name'])
+        self.entry_st_name.grid(row=0, column=1)
+        ttk.Label(grp_station, text="所属县城:").grid(row=0, column=2)
+        self.entry_st_county = ttk.Entry(grp_station)
+        self.entry_st_county.insert(0, self.config['station_info']['county'])
+        self.entry_st_county.grid(row=0, column=3)
+        ttk.Label(grp_station, text="所属城市:").grid(row=0, column=4)
+        self.entry_st_city = ttk.Entry(grp_station)
+        self.entry_st_city.insert(0, self.config['station_info']['city'])
+        self.entry_st_city.grid(row=0, column=5)
+        grp_rule = ttk.LabelFrame(p, text="费用规则 (元)")
+        grp_rule.pack(fill='x', pady=5)
+        ttk.Label(grp_rule, text="[辖区内] 伙食:").grid(row=0, column=0, pady=5)
+        self.e_local_food = ttk.Entry(grp_rule, width=8)
+        self.e_local_food.insert(0, self.config['rules']['local']['food'])
+        self.e_local_food.grid(row=0, column=1)
+        ttk.Label(grp_rule, text="[县城] 往返杂费:").grid(row=1, column=0, pady=5)
+        self.e_county_round = ttk.Entry(grp_rule, width=8)
+        self.e_county_round.insert(0, self.config['rules']['county']['misc_round_trip'])
+        self.e_county_round.grid(row=1, column=1)
+        ttk.Label(grp_rule, text="[县城] 单程杂费:").grid(row=1, column=2)
+        self.e_county_single = ttk.Entry(grp_rule, width=8)
+        self.e_county_single.insert(0, self.config['rules']['county']['misc_one_way'])
+        self.e_county_single.grid(row=1, column=3)
+        ttk.Label(grp_rule, text="[市区] 往返杂费:").grid(row=2, column=0, pady=5)
+        self.e_city_round = ttk.Entry(grp_rule, width=8)
+        self.e_city_round.insert(0, self.config['rules']['city']['misc_round_trip'])
+        self.e_city_round.grid(row=2, column=1)
+        ttk.Label(grp_rule, text="[市区] 单程杂费:").grid(row=2, column=2)
+        self.e_city_single = ttk.Entry(grp_rule, width=8)
+        self.e_city_single.insert(0, self.config['rules']['city']['misc_one_way'])
+        self.e_city_single.grid(row=2, column=3)
+        btn_save = ttk.Button(p, text="保存所有设置", command=self.save_all_settings)
+        btn_save.pack(pady=20)
+    
     def save_all_settings(self):
         self.config['station_info']['name'] = self.entry_st_name.get()
         self.config['station_info']['county'] = self.entry_st_county.get()
         self.config['station_info']['city'] = self.entry_st_city.get()
-        
         try:
             self.config['rules']['local']['food'] = float(self.e_local_food.get())
             self.config['rules']['county']['misc_round_trip'] = float(self.e_county_round.get())
@@ -334,192 +600,12 @@ class TravelApp:
             self.config['rules']['city']['misc_one_way'] = float(self.e_city_single.get())
         except ValueError:
             return messagebox.showerror("错误", "费用必须是数字")
-
         self.save_config()
-        # 更新下拉框
         c = self.config['station_info']['county']
         city = self.config['station_info']['city']
         self.cb_start['values'] = ["本所", c, city]
         self.cb_end['values'] = ["辖区线路", c, city]
         messagebox.showinfo("成功", "设置已保存")
-
-    def generate_excel(self):
-        user_idx = self.cb_users.current()
-        if user_idx == -1: return messagebox.showerror("错误", "请选择用户")
-        
-        user = self.config['users'][user_idx]
-        start_place = self.cb_start.get()
-        end_place = self.cb_end.get()
-        reason = self.entry_reason.get()
-        
-        try:
-            fill_date = datetime.strptime(self.entry_fill_date.get(), "%Y-%m-%d")
-            start_date = datetime.strptime(self.entry_start_date.get(), "%Y-%m-%d")
-            
-            if not self.var_same_day.get():
-                end_date = datetime.strptime(self.entry_end_date.get(), "%Y-%m-%d")
-            else:
-                end_date = start_date
-        except ValueError:
-            return messagebox.showerror("错误", "日期格式错误，应为 YYYY-MM-DD")
-
-        # --- 计算费用和行程 ---
-        trips = [] # 存储每一行数据
-        total_money = 0
-        
-        # 规则判断
-        if end_place == "辖区线路":
-            # 辖区内：只可能有当天往返
-            rule = self.config['rules']['local']
-            trips.append({
-                "date": start_date,
-                "start": self.config['station_info']['name'].replace("供电所",""), # 简写
-                "end": "辖区",
-                "food": rule['food'],
-                "misc": rule['misc'],
-                "days": 1
-            })
-        
-        else:
-            # 县城或市区
-            if end_place == self.config['station_info']['county']:
-                rule = self.config['rules']['county']
-            else:
-                rule = self.config['rules']['city']
-            
-            if self.var_same_day.get():
-                # 当天往返
-                trips.append({
-                    "date": start_date,
-                    "start": start_place.replace("本所", self.config['station_info']['name']),
-                    "end": end_place,
-                    "food": 0,
-                    "misc": rule['misc_round_trip'],
-                    "days": 1
-                })
-            else:
-                # 非当天往返：拆分成去程和回程
-                # 去程
-                trips.append({
-                    "date": start_date,
-                    "start": start_place.replace("本所", self.config['station_info']['name']),
-                    "end": end_place,
-                    "food": 0,
-                    "misc": rule['misc_one_way'],
-                    "days": 1
-                })
-                # 回程
-                trips.append({
-                    "date": end_date,
-                    "start": end_place,
-                    "end": start_place.replace("本所", self.config['station_info']['name']),
-                    "food": 0,
-                    "misc": rule['misc_one_way'],
-                    "days": 1
-                })
-
-        # 计算总金额
-        for t in trips:
-            total_money += t['food'] + t['misc']
-
-        # --- 开始填表 1: 差旅费报销单 ---
-        try:
-            wb = openpyxl.load_workbook(self.config['template_paths']['expense'])
-            ws = wb.active
-
-            # 1. 顶部基础信息 (根据截图坐标)
-            ws['K2'] = fill_date.year
-            ws['M2'] = fill_date.month
-            ws['O2'] = fill_date.day
-            ws['B3'] = self.config['station_info']['name'] # 单位，截图显示B3可能是单位
-            ws['G3'] = self.config['station_info']['name'] # 部门
-            ws['B4'] = user['name'] # 姓名
-            ws['E4'] = reason # 事由
-            ws['G4'] = end_place # 地点
-            
-            # 出差日期说明 J4 (合并格)
-            days_count = (end_date - start_date).days + 1
-            date_desc = f"自 {start_date.year} 年 {start_date.month} 月 {start_date.day} 日 至 {end_date.year} 年 {end_date.month} 月 {end_date.day} 日 计 {days_count} 天"
-            ws['J4'] = date_desc
-
-            # 2. 填写行程列表 (从第8行开始)
-            current_row = 8
-            for t in trips:
-                ws[f'A{current_row}'] = t['date'].year
-                ws[f'B{current_row}'] = t['date'].month
-                ws[f'C{current_row}'] = t['date'].day
-                ws[f'D{current_row}'] = t['start']
-                ws[f'E{current_row}'] = t['end']
-                
-                # 金额填入
-                if t['food'] > 0:
-                    ws[f'H{current_row}'] = 1 # 天数
-                    ws[f'I{current_row}'] = t['food']
-                
-                if t['misc'] > 0:
-                    ws[f'M{current_row}'] = t['misc']
-                
-                current_row += 1
-
-            # 3. 底部信息
-            ws['G14'] = num_to_cn_amount(total_money) # 总金额大写 (Row 14)
-            ws['C15'] = user['name'] # 开户名称
-            ws['F15'] = user['card'] # 账号
-            ws['K15'] = user['bank'] # 银行
-            ws['N15'] = user['phone'] # 电话
-
-            save_name_1 = f"1_报销单_{user['name']}_{start_date.strftime('%m%d')}.xlsx"
-            wb.save(save_name_1)
-
-            # --- 开始填表 2: 报销审核单 ---
-            wb2 = openpyxl.load_workbook(self.config['template_paths']['audit'])
-            ws2 = wb2.active
-            
-            ws2['K4'] = fill_date.year
-            ws2['M4'] = fill_date.month
-            ws2['O4'] = fill_date.day
-            ws2['E6'] = self.config['station_info']['name'] # 部门
-            ws2['J10'] = total_money # 小写金额
-            ws2['C11'] = num_to_cn_amount(total_money) # 大写金额
-            
-            # 银行信息 Row 12
-            ws2['C12'] = user['name']
-            ws2['F12'] = user['card']
-            ws2['K12'] = user['bank']
-            ws2['N12'] = user['phone']
-
-            save_name_2 = f"2_审核单_{user['name']}_{start_date.strftime('%m%d')}.xlsx"
-            wb2.save(save_name_2)
-
-            # --- 开始填表 3: 未派车证明 (如果勾选) ---
-            if self.var_need_nocar.get():
-                wb3 = openpyxl.load_workbook(self.config['template_paths']['no_car'])
-                ws3 = wb3.active
-                
-                # 证明日期 F3, H3, J3
-                ws3['F3'] = fill_date.year
-                ws3['H3'] = fill_date.month
-                ws3['J3'] = fill_date.day
-                
-                ws3['B5'] = self.config['station_info']['name']
-                ws3['E5'] = user['name']
-                ws3['H5'] = end_place
-                ws3['B7'] = reason
-                
-                # 起始日期 B8, D8
-                ws3['B8'] = start_date.month
-                ws3['D8'] = start_date.day
-                # 截止日期 F8, H8
-                ws3['F8'] = end_date.month
-                ws3['H8'] = end_date.day
-
-                save_name_3 = f"3_未派车_{user['name']}_{start_date.strftime('%m%d')}.xlsx"
-                wb3.save(save_name_3)
-
-            messagebox.showinfo("完成", f"已生成表格：\n{save_name_1}\n{save_name_2}")
-
-        except Exception as e:
-            messagebox.showerror("运行出错", f"错误信息: {str(e)}\n请检查模板文件是否存在且未被打开。")
 
 if __name__ == "__main__":
     root = tk.Tk()
