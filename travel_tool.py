@@ -5,7 +5,6 @@ import os
 from datetime import datetime, timedelta
 import openpyxl
 from openpyxl.styles import Alignment
-import copy
 
 # --- 配置文件路径 ---
 CONFIG_FILE = "config.json"
@@ -63,8 +62,8 @@ def num_to_cn_amount(num):
 class TravelApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("供电所差旅费自动生成工具 V2.1 (修正版)")
-        self.root.geometry("950x750")
+        self.root.title("供电所差旅费自动生成工具 V2.3 (鼠标操作版)")
+        self.root.geometry("950x780")
         
         self.config = self.load_config()
         self.trip_list = [] 
@@ -82,6 +81,42 @@ class TravelApp:
     def save_config(self):
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.config, f, indent=4, ensure_ascii=False)
+
+    # --- 辅助函数：创建日期下拉框组合 ---
+    def create_date_picker(self, parent):
+        frame = ttk.Frame(parent)
+        
+        today = datetime.now()
+        years = [str(y) for y in range(today.year - 1, today.year + 2)] # 去年，今年，明年
+        months = [f"{m:02d}" for m in range(1, 13)]
+        days = [f"{d:02d}" for d in range(1, 32)]
+
+        cb_year = ttk.Combobox(frame, values=years, width=5, state="readonly")
+        cb_year.set(today.year)
+        cb_year.pack(side='left', padx=1)
+        ttk.Label(frame, text="年").pack(side='left')
+
+        cb_month = ttk.Combobox(frame, values=months, width=3, state="readonly")
+        cb_month.set(f"{today.month:02d}")
+        cb_month.pack(side='left', padx=1)
+        ttk.Label(frame, text="月").pack(side='left')
+
+        cb_day = ttk.Combobox(frame, values=days, width=3, state="readonly")
+        cb_day.set(f"{today.day:02d}")
+        cb_day.pack(side='left', padx=1)
+        ttk.Label(frame, text="日").pack(side='left')
+
+        return frame, cb_year, cb_month, cb_day
+
+    def get_date_from_picker(self, picker_tuple):
+        _, y, m, d = picker_tuple
+        return f"{y.get()}-{m.get()}-{d.get()}"
+
+    def set_picker_state(self, picker_tuple, state):
+        _, y, m, d = picker_tuple
+        y.config(state=state)
+        m.config(state=state)
+        d.config(state=state)
 
     def setup_ui(self):
         notebook = ttk.Notebook(self.root)
@@ -120,11 +155,11 @@ class TravelApp:
         row += 1
         ttk.Label(left_panel, text="第二步：录入单次行程").grid(row=row, column=0, columnspan=2, sticky='w', pady=(0,5))
 
+        # 出发日期 (改为下拉)
         row += 1
         ttk.Label(left_panel, text="出发日期:").grid(row=row, column=0, sticky='w')
-        self.entry_start_date = ttk.Entry(left_panel)
-        self.entry_start_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.entry_start_date.grid(row=row, column=1, sticky='ew')
+        self.pk_start = self.create_date_picker(left_panel)
+        self.pk_start[0].grid(row=row, column=1, sticky='w')
 
         row += 1
         ttk.Label(left_panel, text="起点:").grid(row=row, column=0, sticky='w')
@@ -143,11 +178,12 @@ class TravelApp:
         self.chk_same_day = ttk.Checkbutton(left_panel, text="当天往返", variable=self.var_same_day, command=self.on_sameday_change)
         self.chk_same_day.grid(row=row, column=1, sticky='w')
 
+        # 返回日期 (改为下拉)
         row += 1
         ttk.Label(left_panel, text="返回日期:").grid(row=row, column=0, sticky='w')
-        self.entry_end_date = ttk.Entry(left_panel)
-        self.entry_end_date.grid(row=row, column=1, sticky='ew')
-        self.entry_end_date.config(state='disabled')
+        self.pk_end = self.create_date_picker(left_panel)
+        self.pk_end[0].grid(row=row, column=1, sticky='w')
+        self.set_picker_state(self.pk_end, "disabled") # 默认当天往返，禁用
 
         row += 1
         self.var_need_nocar = tk.BooleanVar(value=False)
@@ -189,9 +225,9 @@ class TravelApp:
         bottom_frame.pack(fill='x', pady=10)
         
         ttk.Label(bottom_frame, text="填报日期:").pack(side='left', padx=5)
-        self.entry_fill_date = ttk.Entry(bottom_frame, width=12)
-        self.entry_fill_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.entry_fill_date.pack(side='left')
+        # 填报日期也改为下拉
+        self.pk_fill = self.create_date_picker(bottom_frame)
+        self.pk_fill[0].pack(side='left')
 
         btn_gen = ttk.Button(bottom_frame, text="🚀 生成所有文件 (自动增行)", command=self.generate_all_files)
         btn_gen.pack(side='right', padx=10, pady=5)
@@ -205,27 +241,21 @@ class TravelApp:
         if val == "辖区线路":
             self.var_same_day.set(True)
             self.chk_same_day.config(state='disabled')
-            self.entry_end_date.config(state='disabled')
-            self.entry_end_date.delete(0, tk.END)
+            self.set_picker_state(self.pk_end, "disabled")
         else:
             self.chk_same_day.config(state='normal')
             self.on_sameday_change()
 
     def on_sameday_change(self):
         if self.var_same_day.get():
-            self.entry_end_date.delete(0, tk.END)
-            self.entry_end_date.config(state='disabled')
+            self.set_picker_state(self.pk_end, "disabled")
         else:
-            self.entry_end_date.config(state='normal')
-            start = self.entry_start_date.get()
-            try:
-                d = datetime.strptime(start, "%Y-%m-%d")
-                self.entry_end_date.insert(0, (d + timedelta(days=1)).strftime("%Y-%m-%d"))
-            except:
-                pass
+            self.set_picker_state(self.pk_end, "readonly") # 启用
 
     def add_trip_to_list(self):
-        start_date_str = self.entry_start_date.get()
+        # 从下拉框获取日期字符串
+        start_date_str = self.get_date_from_picker(self.pk_start)
+        
         start_place = self.cb_start.get()
         end_place = self.cb_end.get()
         is_same_day = self.var_same_day.get()
@@ -235,11 +265,12 @@ class TravelApp:
         try:
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
             if not is_same_day:
-                end_date = datetime.strptime(self.entry_end_date.get(), "%Y-%m-%d")
+                end_date_str = self.get_date_from_picker(self.pk_end)
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
             else:
                 end_date = start_date
         except ValueError:
-            return messagebox.showerror("错误", "日期格式无效")
+            return messagebox.showerror("错误", "日期无效（例如2月30日）")
 
         new_trips = []
         
@@ -339,9 +370,10 @@ class TravelApp:
         user = self.config['users'][user_idx]
         
         try:
-            fill_date = datetime.strptime(self.entry_fill_date.get(), "%Y-%m-%d")
+            fill_date_str = self.get_date_from_picker(self.pk_fill)
+            fill_date = datetime.strptime(fill_date_str, "%Y-%m-%d")
         except:
-            return messagebox.showerror("错误", "填报日期格式错误")
+            return messagebox.showerror("错误", "填报日期无效")
 
         self.trip_list.sort(key=lambda x: x['date'])
         
@@ -453,12 +485,11 @@ class TravelApp:
         except Exception as e:
             messagebox.showerror("运行出错", str(e))
 
-    # --- 用户管理 (已修正) ---
+    # --- 用户管理 (保持下拉框银行) ---
     def setup_user_tab(self):
         p = ttk.Frame(self.frame_user, padding=10)
         p.pack(fill='both', expand=True)
 
-        # 修正：表头现在明确显示“开户银行”
         cols = ("姓名", "联系电话", "开户银行", "银行卡号")
         self.tree = ttk.Treeview(p, columns=cols, show='headings', height=10)
         for col in cols:
@@ -472,7 +503,13 @@ class TravelApp:
         self.entries_user = {}
         for i, col in enumerate(cols):
             ttk.Label(frame_input, text=col).grid(row=0, column=i, padx=5)
-            e = ttk.Entry(frame_input, width=15)
+            if col == "开户银行":
+                e = ttk.Combobox(frame_input, width=15, values=[
+                    "中国农业银行", "中国工商银行", "中国建设银行", 
+                    "中国邮政储蓄银行", "农村信用社", "长沙银行", "中国银行"
+                ])
+            else:
+                e = ttk.Entry(frame_input, width=15)
             e.grid(row=1, column=i, padx=5)
             self.entries_user[col] = e
 
@@ -498,7 +535,6 @@ class TravelApp:
 
     def add_user(self):
         u = {k: v.get() for k, v in self.entries_user.items()}
-        # 修正：读取字典时使用正确的 Key
         if not u["姓名"]: return
         self.config['users'].append({
             "name": u["姓名"], 
