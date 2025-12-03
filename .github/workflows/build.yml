@@ -1,0 +1,32 @@
+name: 生成EXE文件
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: 安装 Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 安装依赖库
+      run: |
+        pip install openpyxl pyinstaller
+
+    - name: 开始打包 EXE
+      run: |
+        pyinstaller --onefile --noconsole --name="差旅费生成神器" travel_tool.py
+
+    - name: 上传结果
+      uses: actions/upload-artifact@v3
+      with:
+        name: 点击这里下载EXE
+        path: dist/差旅费生成神器.exe
