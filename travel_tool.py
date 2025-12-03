@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import openpyxl
-from openpyxl.cell.cell import MergedCell # 关键导入
+from openpyxl.cell.cell import MergedCell
 
 CONFIG_FILE = "config.json"
 DEFAULT_CONFIG = {
@@ -48,61 +48,22 @@ def num_to_cn_amount(num):
 class TravelApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("供电所差旅费工具 V2.5 (内置测试数据版)")
+        self.root.title("供电所差旅费工具 V2.6 (防崩+权限检测版)")
         self.root.geometry("960x780")
         self.config = self.load_config()
-        
-        # --- 预置测试数据 (测试完可删除) ---
-        self.trip_list = self.load_test_data() 
-        # 正常版本应该是: self.trip_list = []
-        
+        self.trip_list = self.load_test_data() # 内置测试数据
         self.setup_ui()
 
     def load_test_data(self):
-        """生成一套完美的测试数据，覆盖所有场景"""
         trips = []
-        # 1. 辖区内，当天，有未派车
-        trips.append({
-            "date": datetime(2024, 5, 6), "start": "龙潭", "end": "辖区", 
-            "food": 40, "misc": 0, "nocar": True, "reason": "线路巡视",
-            "full_start_date": datetime(2024, 5, 6), "full_end_date": datetime(2024, 5, 6)
-        })
-        # 2. 去县城，当天往返，无证明
-        trips.append({
-            "date": datetime(2024, 5, 8), "start": "龙潭", "end": "桃源县", 
-            "food": 0, "misc": 30, "nocar": False, "reason": "递交资料",
-            "full_start_date": datetime(2024, 5, 8), "full_end_date": datetime(2024, 5, 8)
-        })
-        # 3. 去市区，跨天(5.10去)，有证明
-        trips.append({
-            "date": datetime(2024, 5, 10), "start": "龙潭", "end": "常德市", 
-            "food": 0, "misc": 25, "nocar": True, "reason": "技能培训",
-            "full_start_date": datetime(2024, 5, 10), "full_end_date": datetime(2024, 5, 12)
-        })
-        # 4. 市区回(5.12回)
-        trips.append({
-            "date": datetime(2024, 5, 12), "start": "常德市", "end": "龙潭", 
-            "food": 0, "misc": 25, "nocar": False, "reason": "技能培训",
-            "full_start_date": datetime(2024, 5, 10), "full_end_date": datetime(2024, 5, 12)
-        })
-        # 5. 去县城，跨天(5.15去)
-        trips.append({
-            "date": datetime(2024, 5, 15), "start": "龙潭", "end": "桃源县", 
-            "food": 0, "misc": 15, "nocar": False, "reason": "季度会议",
-            "full_start_date": datetime(2024, 5, 15), "full_end_date": datetime(2024, 5, 16)
-        })
-        # 6. 县城回(5.16回)
-        trips.append({
-            "date": datetime(2024, 5, 16), "start": "桃源县", "end": "龙潭", 
-            "food": 0, "misc": 15, "nocar": False, "reason": "季度会议",
-            "full_start_date": datetime(2024, 5, 15), "full_end_date": datetime(2024, 5, 16)
-        })
-        # 7. 辖区内 (触发增行测试)
-        trips.append({
-            "date": datetime(2024, 5, 20), "start": "龙潭", "end": "辖区", 
-            "food": 40, "misc": 0, "nocar": False, "reason": "临时抢修",
-            "full_start_date": datetime(2024, 5, 20), "full_end_date": datetime(2024, 5, 20)
-        })
+        # 预置7条测试数据，涵盖各种情况
+        trips.append({"date": datetime(2024,5,6), "start": "龙潭", "end": "辖区", "food":40, "misc":0, "nocar":True, "reason":"线路巡视", "full_start_date":datetime(2024,5,6), "full_end_date":datetime(2024,5,6)})
+        trips.append({"date": datetime(2024,5,8), "start": "龙潭", "end": "桃源县", "food":0, "misc":30, "nocar":False, "reason":"递交资料", "full_start_date":datetime(2024,5,8), "full_end_date":datetime(2024,5,8)})
+        trips.append({"date": datetime(2024,5,10), "start": "龙潭", "end": "常德市", "food":0, "misc":25, "nocar":True, "reason":"技能培训", "full_start_date":datetime(2024,5,10), "full_end_date":datetime(2024,5,12)})
+        trips.append({"date": datetime(2024,5,12), "start": "常德市", "end": "龙潭", "food":0, "misc":25, "nocar":False, "reason":"技能培训", "full_start_date":datetime(2024,5,10), "full_end_date":datetime(2024,5,12)})
+        trips.append({"date": datetime(2024,5,15), "start": "龙潭", "end": "桃源县", "food":0, "misc":15, "nocar":False, "reason":"季度会议", "full_start_date":datetime(2024,5,15), "full_end_date":datetime(2024,5,16)})
+        trips.append({"date": datetime(2024,5,16), "start": "桃源县", "end": "龙潭", "food":0, "misc":15, "nocar":False, "reason":"季度会议", "full_start_date":datetime(2024,5,15), "full_end_date":datetime(2024,5,16)})
+        trips.append({"date": datetime(2024,5,20), "start": "龙潭", "end": "辖区", "food":40, "misc":0, "nocar":False, "reason":"临时抢修", "full_start_date":datetime(2024,5,20), "full_end_date":datetime(2024,5,20)})
         return trips
 
     def load_config(self):
@@ -115,13 +76,42 @@ class TravelApp:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.config, f, indent=4, ensure_ascii=False)
 
-    # --- 智能写入函数 (防报错) ---
+    # --- 核心：安全写入函数 (防崩版) ---
     def safe_write(self, ws, coord, value):
-        for rng in ws.merged_cells.ranges:
-            if coord in rng:
-                ws.cell(row=rng.min_row, column=rng.min_col).value = value
-                return
-        ws[coord] = value
+        try:
+            # 1. 先检查该单元格是否为 MergedCell (只读部分)
+            cell = ws[coord]
+            if isinstance(cell, MergedCell):
+                # 2. 如果是，尝试在所有合并区域中找到它的“父节点”
+                found = False
+                for rng in ws.merged_cells.ranges:
+                    if coord in rng:
+                        # 找到了父节点，写入父节点
+                        ws.cell(row=rng.min_row, column=rng.min_col).value = value
+                        found = True
+                        break
+                
+                if not found:
+                    # 3. 如果是 MergedCell 但找不到父节点 (极罕见，可能是 insert_rows 破坏了索引)
+                    # 策略：跳过写入，打印警告，防止崩溃
+                    print(f"Warning: Skipped writing to broken merged cell {coord}")
+            else:
+                # 4. 如果是普通单元格，直接写
+                ws[coord] = value
+        except Exception as e:
+            # 5. 最后一道防线：任何写入错误都捕获，不让程序崩溃
+            print(f"Error writing to {coord}: {str(e)}")
+
+    # --- 核心：检查文件是否被占用 ---
+    def check_file_lock(self, filename):
+        if os.path.exists(filename):
+            try:
+                # 尝试以追加模式打开文件，如果被 Excel 占用会报错
+                with open(filename, 'a'):
+                    pass
+            except PermissionError:
+                return False
+        return True
 
     def create_date_picker(self, parent):
         frame = ttk.Frame(parent)
@@ -165,7 +155,6 @@ class TravelApp:
         self.frame_rules = ttk.Frame(notebook)
         notebook.add(self.frame_rules, text="设置")
         self.setup_rules_tab()
-        # 启动时刷新列表显示预置数据
         self.refresh_trip_list_ui()
 
     def setup_gen_tab(self):
@@ -307,10 +296,15 @@ class TravelApp:
         date_desc = f"自 {min_date.year} 年 {min_date.month} 月 {min_date.day} 日 至 {max_date.year} 年 {max_date.month} 月 {max_date.day} 日 计 {(max_date - min_date).days + 1} 天"
         file_suffix = f"{user['name']}_{fill_date.strftime('%m%d')}"
 
+        # 检查文件占用
+        f1_name = f"1_差旅费报销单_{file_suffix}.xlsx"
+        f2_name = f"2_报销审核单_{file_suffix}.xlsx"
+        if not self.check_file_lock(f1_name) or not self.check_file_lock(f2_name):
+            return messagebox.showerror("错误", "生成的表格文件(如 1_差旅费...xlsx) 正被 Excel 打开。\n请先关闭这些文件，然后再点击生成！")
+
         try:
             wb = openpyxl.load_workbook(self.config['template_paths']['expense'])
             ws = wb.active
-            
             self.safe_write(ws, 'K2', fill_date.year)
             self.safe_write(ws, 'M2', fill_date.month)
             self.safe_write(ws, 'O2', fill_date.day)
@@ -345,7 +339,7 @@ class TravelApp:
             self.safe_write(ws, f'K{r_bk}', user['bank'])
             self.safe_write(ws, f'N{r_bk}', user['phone'])
             
-            wb.save(f"1_差旅费报销单_{file_suffix}.xlsx")
+            wb.save(f1_name)
 
             wb2 = openpyxl.load_workbook(self.config['template_paths']['audit'])
             ws2 = wb2.active
@@ -359,7 +353,7 @@ class TravelApp:
             self.safe_write(ws2, 'F12', user['card'])
             self.safe_write(ws2, 'K12', user['bank'])
             self.safe_write(ws2, 'N12', user['phone'])
-            wb2.save(f"2_报销审核单_{file_suffix}.xlsx")
+            wb2.save(f2_name)
 
             nocar_trips = [t for t in self.trip_list if t.get('nocar')]
             for t in nocar_trips:
