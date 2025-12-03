@@ -4,8 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import openpyxl
-# 引入 MergedCell 检查机制
-from openpyxl.cell.cell import MergedCell
+from openpyxl.cell.cell import MergedCell # 关键导入
 
 CONFIG_FILE = "config.json"
 DEFAULT_CONFIG = {
@@ -49,11 +48,62 @@ def num_to_cn_amount(num):
 class TravelApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("供电所差旅费工具 V2.4 (合并单元格修复版)")
+        self.root.title("供电所差旅费工具 V2.5 (内置测试数据版)")
         self.root.geometry("960x780")
         self.config = self.load_config()
-        self.trip_list = [] 
+        
+        # --- 预置测试数据 (测试完可删除) ---
+        self.trip_list = self.load_test_data() 
+        # 正常版本应该是: self.trip_list = []
+        
         self.setup_ui()
+
+    def load_test_data(self):
+        """生成一套完美的测试数据，覆盖所有场景"""
+        trips = []
+        # 1. 辖区内，当天，有未派车
+        trips.append({
+            "date": datetime(2024, 5, 6), "start": "龙潭", "end": "辖区", 
+            "food": 40, "misc": 0, "nocar": True, "reason": "线路巡视",
+            "full_start_date": datetime(2024, 5, 6), "full_end_date": datetime(2024, 5, 6)
+        })
+        # 2. 去县城，当天往返，无证明
+        trips.append({
+            "date": datetime(2024, 5, 8), "start": "龙潭", "end": "桃源县", 
+            "food": 0, "misc": 30, "nocar": False, "reason": "递交资料",
+            "full_start_date": datetime(2024, 5, 8), "full_end_date": datetime(2024, 5, 8)
+        })
+        # 3. 去市区，跨天(5.10去)，有证明
+        trips.append({
+            "date": datetime(2024, 5, 10), "start": "龙潭", "end": "常德市", 
+            "food": 0, "misc": 25, "nocar": True, "reason": "技能培训",
+            "full_start_date": datetime(2024, 5, 10), "full_end_date": datetime(2024, 5, 12)
+        })
+        # 4. 市区回(5.12回)
+        trips.append({
+            "date": datetime(2024, 5, 12), "start": "常德市", "end": "龙潭", 
+            "food": 0, "misc": 25, "nocar": False, "reason": "技能培训",
+            "full_start_date": datetime(2024, 5, 10), "full_end_date": datetime(2024, 5, 12)
+        })
+        # 5. 去县城，跨天(5.15去)
+        trips.append({
+            "date": datetime(2024, 5, 15), "start": "龙潭", "end": "桃源县", 
+            "food": 0, "misc": 15, "nocar": False, "reason": "季度会议",
+            "full_start_date": datetime(2024, 5, 15), "full_end_date": datetime(2024, 5, 16)
+        })
+        # 6. 县城回(5.16回)
+        trips.append({
+            "date": datetime(2024, 5, 16), "start": "桃源县", "end": "龙潭", 
+            "food": 0, "misc": 15, "nocar": False, "reason": "季度会议",
+            "full_start_date": datetime(2024, 5, 15), "full_end_date": datetime(2024, 5, 16)
+        })
+        # 7. 辖区内 (触发增行测试)
+        trips.append({
+            "date": datetime(2024, 5, 20), "start": "龙潭", "end": "辖区", 
+            "food": 40, "misc": 0, "nocar": False, "reason": "临时抢修",
+            "full_start_date": datetime(2024, 5, 20), "full_end_date": datetime(2024, 5, 20)
+        })
+        return trips
 
     def load_config(self):
         if not os.path.exists(CONFIG_FILE): return DEFAULT_CONFIG
@@ -65,20 +115,12 @@ class TravelApp:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.config, f, indent=4, ensure_ascii=False)
 
-    # --- 智能写入函数：解决 MergedCell read-only 报错 ---
+    # --- 智能写入函数 (防报错) ---
     def safe_write(self, ws, coord, value):
-        """
-        如果 coord (如 'K2') 是合并单元格的一部分，自动找到左上角的格子写入。
-        """
-        # 遍历该工作表所有的合并区域
         for rng in ws.merged_cells.ranges:
             if coord in rng:
-                # 找到了！K2 在这个合并区域里。
-                # 写入该区域左上角的那个格子 (min_row, min_col)
                 ws.cell(row=rng.min_row, column=rng.min_col).value = value
                 return
-        
-        # 如果没在合并区域里，直接写
         ws[coord] = value
 
     def create_date_picker(self, parent):
@@ -123,6 +165,8 @@ class TravelApp:
         self.frame_rules = ttk.Frame(notebook)
         notebook.add(self.frame_rules, text="设置")
         self.setup_rules_tab()
+        # 启动时刷新列表显示预置数据
+        self.refresh_trip_list_ui()
 
     def setup_gen_tab(self):
         left_panel = ttk.Frame(self.frame_gen, padding=10)
@@ -266,7 +310,7 @@ class TravelApp:
         try:
             wb = openpyxl.load_workbook(self.config['template_paths']['expense'])
             ws = wb.active
-            # === 使用 safe_write 替代直接赋值 ===
+            
             self.safe_write(ws, 'K2', fill_date.year)
             self.safe_write(ws, 'M2', fill_date.month)
             self.safe_write(ws, 'O2', fill_date.day)
@@ -281,7 +325,6 @@ class TravelApp:
             orig_rows = 6
             for i, t in enumerate(self.trip_list):
                 if i >= orig_rows: ws.insert_rows(curr_row)
-                # 列表区域也使用 safe_write
                 self.safe_write(ws, f'A{curr_row}', t['date'].year)
                 self.safe_write(ws, f'B{curr_row}', t['date'].month)
                 self.safe_write(ws, f'C{curr_row}', t['date'].day)
